@@ -17,7 +17,8 @@
 #include "example/mnist/dataset.h"
 #include "example/mnist/net.h"
 
-DEFINE_string(dataset, "", "mnist dataset path");
+// CLI flags.
+DEFINE_string(dataset, "/home/maxxx_1/datasets/mnist", "mnist dataset path");
 DEFINE_int32(bs, 64, "batch size");
 DEFINE_int32(num_epoch, 1, "num epochs");
 DEFINE_double(lr, 0.01, "learning rate");
@@ -26,20 +27,25 @@ DEFINE_string(device, "cpu", "device type (cpu/cuda)");
 using namespace infini_train;
 
 namespace {
+// Log every N train iterations.
 constexpr int kNumItersOfOutputDuration = 10;
+// Number of classes in MNIST.
 constexpr int kNumClasses = 10;
 
 constexpr char kDeviceCPU[] = "cpu";
 constexpr char kDeviceCUDA[] = "cuda";
 }; // namespace
 
+// Validate device flag.
 DEFINE_validator(device,
                  [](const char *, const std::string &value) { return value == kDeviceCPU || value == kDeviceCUDA; });
 
 int main(int argc, char *argv[]) {
+    // Init.
     gflags::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
 
+    // Data.
     auto train_dataset = std::make_shared<MNISTDataset>(FLAGS_dataset, true);
     DataLoader train_dataloader(train_dataset, FLAGS_bs);
 
@@ -47,15 +53,20 @@ int main(int argc, char *argv[]) {
     auto test_dataset = std::make_shared<MNISTDataset>(FLAGS_dataset, false);
     DataLoader test_dataloader(test_dataset, FLAGS_bs);
 
+    // Model.
     auto network = MNIST();
+
+    // Device.
     Device device = FLAGS_device == kDeviceCPU ? Device() : Device(Device::DeviceType::kCUDA, 0);
     Device cpu_device = Device();
     network.To(device);
 
+    // Loss and optimizer.
     auto loss_fn = nn::CrossEntropyLoss();
     loss_fn.To(device);
     auto optimizer = optimizers::SGD(network.Parameters(), FLAGS_lr);
 
+    // Train loop.
     for (int epoch = 0; epoch < FLAGS_num_epoch; ++epoch) {
         int train_idx = 0;
         float total_loss = 0.0;
@@ -63,13 +74,17 @@ int main(int argc, char *argv[]) {
         const auto epoch_start = std::chrono::high_resolution_clock::now();
 
         for (const auto &[image, label] : train_dataloader) {
+            // Move batch to compute device.
             auto new_image = std::make_shared<Tensor>(image->To(device));
             auto new_label = std::make_shared<Tensor>(label->To(device));
 
             auto outputs = network.Forward({new_image});
+
+            // Clear stale gradients.
             optimizer.ZeroGrad();
 
             auto loss = loss_fn.Forward({outputs[0], new_label});
+
             auto loss_cpu = loss[0]->To(cpu_device);
             float current_loss = static_cast<float *>(loss_cpu.DataPtr())[0];
             total_loss += current_loss;
@@ -80,6 +95,7 @@ int main(int argc, char *argv[]) {
             }
 
             loss[0]->Backward();
+
             optimizer.Step();
             train_idx += 1;
         }
@@ -92,6 +108,7 @@ int main(int argc, char *argv[]) {
                                   train_dataset->Size() / (duration_us / 1e6));
     }
 
+    // Eval loop.
     // TODO(dcj): Add no_grad() context manager later.
     std::vector<float> test_losses;
     int correct = 0;
